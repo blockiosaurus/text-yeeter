@@ -1,82 +1,92 @@
 /* eslint-disable no-await-in-loop */
-import { Button, Container, Fieldset, FileInput, Select, Space, Title, Text } from '@mantine/core';
-import { useWallet } from '@solana/wallet-adapter-react';
+import { Button, Container, Fieldset, FileInput, Select, Space, Title, Text, Textarea } from '@mantine/core';
+// import { useWallet } from '@solana/wallet-adapter-react';
 
 import { useEffect, useState } from 'react';
-// import { createAwsUploader } from '@metaplex-foundation/umi-uploader-aws';
-import { createBundlrUploader } from '@metaplex-foundation/umi-uploader-bundlr';
-import { UploaderInterface, amountToNumber, createGenericFileFromBrowserFile } from '@metaplex-foundation/umi';
-import { createIrysUploader } from '@metaplex-foundation/umi-uploader-irys';
-import { createNftStorageUploader } from '@metaplex-foundation/umi-uploader-nft-storage';
-import { createInscriptionUploader } from '@metaplex-foundation/umi-uploader-inscriptions';
 import { useUmi } from '../useUmi';
+import { findInscriptionMetadataPda, initialize, writeData } from '@metaplex-foundation/mpl-inscription';
+import { generateSigner } from '@metaplex-foundation/umi';
 
-export function Mint() {
+const INSCRIPTION_GATEWAY = 'https://igw.metaplex.com';
+const INSCRIPTION_METADATA_COST = 0.00152424;
+
+export function Mint({env}: {env: string}) {
   // const wallet = useWallet();
   const umi = useUmi();
-  const [uploader, setUploader] = useState<string | null>(null);
-  const [uploaderInterface, setUploaderInterface] = useState<UploaderInterface | null>(null);
-  const [file, setFile] = useState<File | null>(null);
+  const [text, setText] = useState<string>('');
   const [url, setUrl] = useState<string | null>(null);
-  const [cost, setCost] = useState<number | null>(null);
+  const [cost, setCost] = useState<number>(INSCRIPTION_METADATA_COST + 0.00089088);
+  const [network, setNetwork] = useState<string>('devnet');
 
   const handleUpload = async () => {
-    if (!file) {
-      return;
+    const inscriptionAccount = generateSigner(umi)
+    let builder = initialize(umi, {
+      inscriptionAccount
+    });
+
+    // Iterate through the text in 800 byte chunks.
+    const chunkSize = 800;
+    const chunks = [];
+    for (let i = 0; i < text.length; i += chunkSize) {
+      chunks.push(text.substring(i, i + chunkSize));
     }
 
-    if (!uploaderInterface) {
-      return;
+    console.log(chunks);
+
+    // Inscribe each chunk sequentially.
+    let inscriptionMetadataAccount = findInscriptionMetadataPda(umi, {
+      inscriptionAccount: inscriptionAccount.publicKey
+    });
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      builder = builder.add(
+        writeData(umi, {
+          inscriptionAccount: inscriptionAccount.publicKey,
+          inscriptionMetadataAccount,
+          associatedTag: null,
+          offset: i * chunkSize,
+          value: Buffer.from(chunk),
+        })
+      );
     }
 
-    setUrl((await uploaderInterface.upload([await createGenericFileFromBrowserFile(file)])).at(0) ?? null);
+    const txes = builder.unsafeSplitByTransactionSize(umi);
+
+    // Send the transactions.
+    for (let i = 0; i < txes.length; i++) {
+      const tx = txes[i];
+      await tx.sendAndConfirm(umi, { confirm: { commitment: 'finalized' } });
+    }
+
+    setUrl(`${INSCRIPTION_GATEWAY}/${network}/${inscriptionAccount.publicKey.toString()}`);
   };
 
-  useEffect(() => {
-    switch (uploader) {
-      case 'AWS':
-        // setUploaderInterface(new createAwsUploader());
-        break;
-      case 'Bundlr (Arweave)':
-        setUploaderInterface(createBundlrUploader(umi));
-        break;
-      case 'Irys (Arweave)':
-        setUploaderInterface(createIrysUploader(umi));
-        break;
-      case 'NFT Storage (IPFS)':
-        setUploaderInterface(createNftStorageUploader(umi));
-        break;
-      case 'Inscriptions (Solana)':
-        setUploaderInterface(createInscriptionUploader(umi));
-        break;
-      default:
-    }
-  }, [uploader]);
+  const handleTextChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setText(event.currentTarget.value);
+  }
 
   useEffect(() => {
-    async function getCost() {
-      if (uploaderInterface && file) {
-        const price = await uploaderInterface.getUploadPrice([await createGenericFileFromBrowserFile(file)]);
-        setCost(amountToNumber(price));
-      }
+    async function updateCost() {
+      const textSize = (new TextEncoder().encode(text)).length;
+      const cost = INSCRIPTION_METADATA_COST + 0.00089088 + textSize * 0.00000696;
+      setCost(cost)
     }
-    getCost();
-  }, [uploaderInterface, file]);
+    updateCost();
+  }, [text]);
+
+  useEffect(() => {
+    if (env === 'mainnet-beta') {
+      setNetwork('mainnet');
+    } else if (env === 'devnet') {
+      setNetwork('devnet');
+    }
+  }, [env]);
 
   return (
     <Container size="md">
-      <Title order={3} mb="lg">Upload file to:</Title>
+      <Title order={3} mb="lg">Metaplex Inscriptions:</Title>
       <Fieldset>
-        <Select
-          label="Storage Provider"
-          placeholder="Pick a provider"
-          data={['AWS', 'Bundlr (Arweave)', 'Irys (Arweave)', 'NFT Storage (IPFS)', 'Inscriptions (Solana)']}
-          onChange={setUploader}
-        />
-
-        <Space h="md" />
-
-        <FileInput label="File to Upload" onChange={setFile} />
+        <Textarea label="Text to Yeet" onChange={handleTextChange} />
 
         <Space h="md" />
 

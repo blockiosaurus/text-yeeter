@@ -51,7 +51,7 @@ export default function HomePage() {
                 mt="xl"
                 pb={100}
               >
-                <Mint />
+                <Mint env={env} />
               </Container>
             </AppShell.Main>
           </AppShell>
